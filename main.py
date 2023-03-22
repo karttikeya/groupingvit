@@ -54,6 +54,13 @@ parser.add_argument(
 parser.add_argument(
     "--patch_size", default=(4, 4), help="patch size in patchification"
 )
+
+parser.add_argument(
+    "--share_mini",
+    default=False,
+    type=bool,
+    help="whether to share mini across layers",
+)
 parser.add_argument("--image_size", default=(32, 32), help="input image size")
 parser.add_argument(
     "--num_classes",
@@ -112,6 +119,7 @@ model = CIFARViT(
     image_size=args.image_size,
     num_classes=args.num_classes,
     keep_eta = args.eta,
+    share_mini = args.share_mini,
 )
 
 model = model.to(device)

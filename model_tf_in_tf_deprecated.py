@@ -106,6 +106,7 @@ class Block(nn.Module):
         super().__init__()
         # F and G can be arbitrary functions, here we use
         # simple attwntion and MLP sub-blocks using vanilla attention.
+        self.use_mini = mini_tf is not None
         self.F = AttentionSubBlock(
             dim=dim, num_heads=num_heads, keep_eta = keep_eta, mini_tf=mini_tf
         )
@@ -115,10 +116,12 @@ class Block(nn.Module):
     def forward(self, x):
         
         x_f  = self.F(x)
-        x = self.F.handle_grouping(x)
-
+        if not self.use_mini:
+            # x = self.F.handle_grouping(x)
+            x = self.F.attn.proj(x)
         x = x_f + x
-        x = self.G(x) + x
+        
+        x = self.G(x)
         return x
 
 class MLPSubblock(nn.Module):
@@ -139,7 +142,7 @@ class MLPSubblock(nn.Module):
         )
 
     def forward(self, x):
-        return self.mlp(self.norm(x))
+        return self.mlp(self.norm(x)) + x
 
 
 class AttentionSubBlock(nn.Module):
@@ -150,39 +153,40 @@ class AttentionSubBlock(nn.Module):
 
         super().__init__()
         self.norm = nn.LayerNorm(dim, eps=1e-6, elementwise_affine=True)
-        self.attn = MHA(dim, num_heads, 
-        batch_first=True)
+        self.attn = Attention(dim, dim, num_heads)
         self.keep_eta = keep_eta
         self.H = num_heads
         self.use_mini = True
         if mini_tf is None:
             self.use_mini = False
-            self.proj_vals = nn.Linear(dim, int(keep_eta*dim))
+
         self.mini_tf = mini_tf
     
     def handle_grouping(self, x):
+
         if not self.use_mini:
-            return self.proj_vals(x)
+            return self.attn.proj(x)
         
         # B, L, C = x.shape
         # #TODO: mix heads after baby transformer
         # x = torch.einsum("BLHC,BHLM->BMHC",x.reshape(B, L, self.H, C // self.H), self.weights)
         # x = x.reshape(B, int(L*self.keep_eta), C)
 
+        # this cannot work with downsampling in the baby transformer
         return x
 
     def forward(self, x):
 
-        x = self.norm(x)
-
+        out = self.norm(x)
 
         if not self.use_mini:
-            x_v = self.handle_grouping(x)
-            out, _ = self.attn(x, x, x_v, need_weights=False)
-        else:
-            B, L, C = x.shape
+            # note that the default pytorch attention behavior is different.
+            out, _ = self.attn(out)
 
-            out, weights = self.attn(x, x, x, need_weights=True, average_attn_weights=False)
+        else:
+            B, L, C = out.shape
+
+            out, weights = self.attn(out)
 
             #TODO: stale info warning!
             # weights is [N,num_heads,L,L]
@@ -196,4 +200,48 @@ class AttentionSubBlock(nn.Module):
             out = out.reshape(B, int(L*self.keep_eta), C)
             
         return out
+
+class Attention(nn.Module):
+    def __init__(
+        self,
+        dim_in,
+        dim_out,
+        num_heads,
+    ):
+        super().__init__()
+
+        self.H = num_heads
+        head_dim = dim_in // num_heads
+
+        self.dim_out = dim_out
+        self.scale = head_dim**-0.5
+        self.qkv = nn.Linear(dim_in, 3 * dim_in, bias=False)
+        self.proj = nn.Linear(dim_in, dim_out)
+
+    def forward(self, x):
+        '''
+        Always also returns non averaged weights
+        '''
+        B, L, _ = x.shape
+
+        qkv = (
+            self.qkv(x)
+            .reshape(B, L, 3, self.H, -1)
+            .permute(2, 0, 3, 1, 4)
+        )
+
+        q, k, v = qkv[0], qkv[1], qkv[2]
+
+
+        attn = (q * self.scale) @ k.transpose(-2, -1)
+        
+        attn = attn.softmax(dim=-1)
+
+        x = attn @ v
+
+        x = x.transpose(1, 2).reshape(B, -1, self.dim_out)
+        x = self.proj(x)
+
+        return x, attn
+
 

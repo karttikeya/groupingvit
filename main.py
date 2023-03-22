@@ -11,7 +11,8 @@ from torch.cuda.amp import GradScaler
 
 import torchvision
 import torchvision.transforms as transforms
-from model_tokendrop import CIFARViT
+# from model_tokendrop import CIFARViT
+from model_tf_in_tf import CIFARViT
 
 
 import wandb
@@ -20,6 +21,7 @@ from fvcore.nn import FlopCountAnalysis, flop_count_table
 
 
 wandb.init(
+    entity="cppr",
     # set the wandb project where this run will be logged
     project="groupingvit"
 )

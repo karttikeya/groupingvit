@@ -43,7 +43,7 @@ class CIFARViT(nn.Module):
         self.use_mini = use_mini
         mini_tf = None
         if use_mini:
-            mini_tf = CIFARViT(use_mini=False, embed_dim=num_patches, n_head=1, depth=2, keep_eta=keep_eta)
+            mini_tf = CIFARViT(use_mini=False, embed_dim=num_patches, n_head=1, depth=1, keep_eta=keep_eta)
 
 
             # Standard Patchification and absolute positional embeddings as in ViT
@@ -116,8 +116,7 @@ class Block(nn.Module):
         
         x_f  = self.F(x)
         x = self.F.handle_grouping(x)
-        # import ipdb
-        # ipdb.set_trace()
+
         x = x_f + x
         x = self.G(x) + x
         return x
@@ -165,10 +164,10 @@ class AttentionSubBlock(nn.Module):
         if not self.use_mini:
             return self.proj_vals(x)
         
-        B, L, C = x.shape
-        #TODO: mix heads after baby transformer
-        x = torch.einsum("BLHC,BHLM->BMHC",x.reshape(B, L, self.H, C // self.H), self.weights)
-        x = x.reshape(B, int(L*self.keep_eta), C)
+        # B, L, C = x.shape
+        # #TODO: mix heads after baby transformer
+        # x = torch.einsum("BLHC,BHLM->BMHC",x.reshape(B, L, self.H, C // self.H), self.weights)
+        # x = x.reshape(B, int(L*self.keep_eta), C)
 
         return x
 
@@ -176,8 +175,6 @@ class AttentionSubBlock(nn.Module):
 
         x = self.norm(x)
 
-        # just so as to be able to use the standard pytorch MHA module
-        # with torch.no_grad():
 
         if not self.use_mini:
             x_v = self.handle_grouping(x)
@@ -186,12 +183,17 @@ class AttentionSubBlock(nn.Module):
             B, L, C = x.shape
 
             out, weights = self.attn(x, x, x, need_weights=True, average_attn_weights=False)
+
             #TODO: stale info warning!
             # weights is [N,num_heads,L,L]
             weights_new = self.mini_tf(weights.flatten(0,1)).view(B, self.H, L, int(L*self.keep_eta))
-            self.weights = weights_new.softmax(-2)
-            out = self.handle_grouping(out)
+            weights_new = weights_new.softmax(-2)
+            self.weights = weights_new.detach()
+
             
+            #TODO: mix heads after baby transformer
+            out = torch.einsum("BLHC,BHLM->BMHC",out.reshape(B, L, self.H, C // self.H), self.weights)
+            out = out.reshape(B, int(L*self.keep_eta), C)
             
         return out
 

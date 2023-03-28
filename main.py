@@ -12,12 +12,12 @@ from torch.cuda.amp import GradScaler
 import torchvision
 import torchvision.transforms as transforms
 # from model_tokendrop import CIFARViT
-from model_tf_in_tf import CIFARViT
+from model_tokendrop_graphcut import CIFARViT
 
 
 import wandb
 import random
-from fvcore.nn import FlopCountAnalysis, flop_count_table
+# from fvcore.nn import FlopCountAnalysis, flop_count_table
 
 
 wandb.init(
@@ -119,11 +119,11 @@ model = CIFARViT(
     image_size=args.image_size,
     num_classes=args.num_classes,
     keep_eta = args.eta,
-    share_mini = args.share_mini,
+    # share_mini = args.share_mini,
 )
 
 model = model.to(device)
-print(flop_count_table(FlopCountAnalysis(model, torch.rand(1, 3, 32, 32).to(device))))
+# print(flop_count_table(FlopCountAnalysis(model, torch.rand(1, 3, 32, 32).to(device))))
 
 criterion = nn.CrossEntropyLoss()
 optimizer = optim.Adam(model.parameters(), lr=args.lr)
@@ -138,12 +138,9 @@ def train(epoch):
     correct = 0
     total = 0
     for batch_idx, (inputs, targets) in enumerate(trainloader):
-
         # We do not need to specify AMP autocast in forward pass here since
         # that is taken care of already in the forward of individual modules.
         inputs, targets = inputs.to(device), targets.to(device)
-
-
 
         outputs = model(inputs)
         loss = criterion(outputs, targets)
@@ -157,6 +154,8 @@ def train(epoch):
 
         total += targets.size(0)
         correct += predicted.eq(targets).sum().item()
+
+        print('batch:', batch_idx+1, '/', len(trainloader))
 
     print(f"Training Accuracy:{100.*correct/total: 0.2f}")
     print(f"Training Loss:{train_loss/(batch_idx+1): 0.3f}")

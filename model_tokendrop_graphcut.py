@@ -1,6 +1,7 @@
 import torch
 from torch import nn
 from math import log2
+from utils_ed_plus import Batched_ED_Plus #DC-based ED for dim<64
 
 # Needed to implement custom backward pass
 from torch.autograd import Function as Function
@@ -8,6 +9,7 @@ from torch.autograd import Function as Function
 # We use the standard pytorch multi-head attention module
 from torch.nn import MultiheadAttention as MHA
 
+batched_ed_plus = Batched_ED_Plus.apply
 
 class CIFARViT(nn.Module):
     def __init__(
@@ -143,7 +145,6 @@ class AttentionSubBlock(nn.Module):
         B, N, C = x.shape
         H = self.num_heads
         c = C // H  # dim per each head
-
         
         # We concat head outputs on the sequence dim (as opposed to embd dim).
         # Hence we divide the num of out tokens by H. The out tokens are set by
@@ -152,7 +153,7 @@ class AttentionSubBlock(nn.Module):
         N_eigs = max(int(log2(N * eta / H)), 1)
         N_out = 2 ** N_eigs
 
-        print(N, N_eigs, N_out, N_out*H)
+        # print(N, N_eigs, N_out, N_out * H)
 
         # chop and proj to query, key, values
         qkv = self.qkv(x).reshape(B, N, 3, H, c).permute(2, 0, 3, 1, 4)
@@ -179,20 +180,20 @@ class AttentionSubBlock(nn.Module):
         lap = inv_sqrt_deg_vec * (deg - attn) * inv_sqrt_deg_vec.transpose(-2, -1)
 
         # get K+1 smallest eigen vals and vecs 
-        eig_vals, eig_vecs = torch.lobpcg(lap, k=N_eigs+1, largest=False, tol=1e-3)
-        eig_vecs = eig_vecs.to(x.device)
+        # eig_vals, eig_vecs = torch.lobpcg(lap, k=N_eigs+1, largest=False, method="ortho")
+        eig_vals, eig_vecs = batched_ed_plus(lap.view(B*H, N, N))
+        # First eig vec corresondse to eig val 0, and is a*ones, not useful,
+        eig_vecs = eig_vecs[:, 1:N_eigs+1].view(B, H, N_eigs, N)
 
         # First eig vec corresondse to eig val 0, and is a*ones, not useful.
-        eig_vecs = eig_vecs.transpose(-2, -1)[:, :, 1:]  # [B, H, N_eigs, N]
+        # eig_vecs = eig_vecs.transpose(-2, -1)[:, :, 1:]  # [B, H, N_eigs, N]
 
         # all possible (+1, -1) combinations with output length -> [N_out, N_eigs]
         combs = torch.cartesian_prod(*([torch.tensor([1., -1], device=x.device)] * N_eigs))
-        if combs.dim == 1:
+        if combs.dim() == 1:
             combs = combs.unsqueeze(1)  # in case only one eig
 
-    
         # get modified attention, each row is a group, mutliply by values to get output
-        print(combs.shape, eig_vecs.shape)
         group_attn = torch.einsum('OE,BHEN->BHON', combs, eig_vecs) # [B, H, N_out, N]
         group_attn = group_attn.softmax(-1)
         x = (group_attn @ v)  # [B, H, N_out, c]

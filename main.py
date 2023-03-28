@@ -155,7 +155,7 @@ def train(epoch):
         total += targets.size(0)
         correct += predicted.eq(targets).sum().item()
 
-        print('batch:', batch_idx+1, '/', len(trainloader))
+        print('batch:', batch_idx+1, '/', len(trainloader), "loss:", loss.item())
 
     print(f"Training Accuracy:{100.*correct/total: 0.2f}")
     print(f"Training Loss:{train_loss/(batch_idx+1): 0.3f}")

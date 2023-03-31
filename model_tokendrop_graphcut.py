@@ -102,7 +102,7 @@ class Block(nn.Module):
 
         self.G = MLPSubblock(dim=dim)
 
-    def forward(self, x, eta=0.5):
+    def forward(self, x, eta=1.0):
         x_f = self.F(x, eta)
         x = x_f #+ torch.gather(x, 1, indices)
         x = self.G(x) + x
@@ -153,8 +153,6 @@ class AttentionSubBlock(nn.Module):
         N_eigs = max(int(log2(N * eta / H)), 1)
         N_out = 2 ** N_eigs
 
-        # print(N, N_eigs, N_out, N_out * H)
-
         # chop and proj to query, key, values
         qkv = self.qkv(x).reshape(B, N, 3, H, c).permute(2, 0, 3, 1, 4)
         q, k, v = qkv.unbind(0)   # each [B, H, N, c]
@@ -181,9 +179,23 @@ class AttentionSubBlock(nn.Module):
 
         # get K+1 smallest eigen vals and vecs 
         # eig_vals, eig_vecs = torch.lobpcg(lap, k=N_eigs+1, largest=False, method="ortho")
-        eig_vals, eig_vecs = batched_ed_plus(lap.view(B*H, N, N))
+        eig_vecs, eig_diag = batched_ed_plus(lap.view(B*H, N, N))
+
+
+        # take the values on diagonal and sort them, use indices to sort the vecs too
+        eig_vals, ids = torch.diagonal(eig_diag, dim1=-2, dim2=-1).sort(dim=-1)
+        eig_vecs = torch.gather(eig_vecs, -2, ids.unsqueeze(-1).expand(eig_vecs.shape)) 
+
         # First eig vec corresondse to eig val 0, and is a*ones, not useful,
         eig_vecs = eig_vecs[:, 1:N_eigs+1].view(B, H, N_eigs, N)
+        
+        
+        if eig_vecs.isnan().any() or eig_vecs.isinf().any(): # or eig_vals.isnan().any() or eig_vals.isinf().any():
+            import ipdb
+            ipdb.set_trace()
+        # print('vecs', eig_vecs[0, 0, 0])
+        # print('vals', eig_vals[0])
+
 
         # First eig vec corresondse to eig val 0, and is a*ones, not useful.
         # eig_vecs = eig_vecs.transpose(-2, -1)[:, :, 1:]  # [B, H, N_eigs, N]
@@ -203,3 +215,18 @@ class AttentionSubBlock(nn.Module):
         x = x.reshape(B, H*N_out, c) 
         x = self.proj(x)  # proj goes head_dim (c) -> dim (C) since we didn't concat on the chans
         return x
+
+
+
+
+
+
+
+
+        # eig_vecs_list, eig_diag_list = [], []
+        # for h in range(H):
+        #     eig_vecs, eig_diag = batched_ed_plus(lap[:, h])
+        #     eig_vecs_list.append(eig_vecs)
+        #     eig_diag_list.append(eig_diag)
+        # eig_vecs = torch.stack(eig_vecs_list, dim=1)
+        # eig_diag = torch.stack(eig_diag_list, dim=1)
